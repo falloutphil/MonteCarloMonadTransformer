@@ -93,19 +93,34 @@ mc :: MonteCarloStateT BoxMullerQuasiState ()
 mc = StateT $ \s -> do nextNormal <- generateNormal
                        let stochastic = 0.2*1*nextNormal
                            drift = 0.05 - (0.5*(0.2*0.2))*1
-                           !newStockSum = payOff 100 ( 100 * exp ( drift + stochastic ) ) + s
+                           !newStockSum = payOff 100 ( 100 * exp ( drift + stochastic ) ) Call + s
                        return ((),newStockSum)
 
-payOff :: Double -> Double -> Double
-payOff strike stock | (stock - strike) > 0 = stock - strike
-                    | otherwise = 0
+data PutCall = Put
+             | Call
+               deriving (Eq, Show)
 
+putCallMult :: Num a => PutCall -> a
+putCallMult Call = 1
+putCallMult Put  = -1
+
+payOff :: Double -> Double -> PutCall -> Double
+payOff strike stock putcall | profit > 0 = profit
+                            | otherwise = 0
+  where
+    profit = (putCallMult putcall)*(stock - strike)
 
 
 iterations = 2000000
 main :: IO()
-main = do let sumOfPayOffs = evalState ( evalStateT ( execStateT (do replicateM_ iterations mc) $ 0 ) $ (Nothing,nextHalton) ) $  (1,[3,5]) -- (ranq1Init 981110)
-          let averagePO = sumOfPayOffs / fromIntegral iterations
-          let discountPO = averagePO * exp (-0.05)
+-- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
+-- is initalised in the outter evalStateT
+main = do let sumOfPayOffs = evalState bmState (1,[3,5]) 
+                where 
+                  mcState = execStateT (do replicateM_ iterations mc) 0
+                  bmState = evalStateT mcState (Nothing,nextHalton)
+              averagePO = sumOfPayOffs / fromIntegral iterations
+              discountPO = averagePO * exp (-0.05)
           print discountPO
  
+-- (ranq1Init 981110)

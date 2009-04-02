@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns, TypeSynonymInstances #-}
 
 import Control.Monad.State.Strict
 import Debug.Trace
@@ -6,13 +6,16 @@ import Debug.Trace
 import Data.Word (Word64)
 import Data.Bits (shift,xor)
 
+-- Typeclass for RNG Types
+class RngClass myType where
+  nextRand :: myType [Double] 
+
+type QuasiRandomState = State (Int,[Int])
 
 -- State Monad for QRNGs - stores current iteration and list of
 -- bases to compute
-type QuasiRandomState = State (Int,[Int])
-
-nextHalton :: QuasiRandomState [Double]
-nextHalton = do (n,bases) <- get
+instance RngClass QuasiRandomState where
+  nextRand = do (n,bases) <- get
                 let !nextN = n+1
 	        put (nextN,bases)
 	        return $ map (reflect (n,1,0)) bases
@@ -111,14 +114,14 @@ payOff strike stock putcall | profit > 0 = profit
     profit = (putCallMult putcall)*(stock - strike)
 
 
-iterations = 2000000
+iterations = 200000
 main :: IO()
 -- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
 -- is initalised in the outter evalStateT
 main = do let sumOfPayOffs = evalState bmState (1,[3,5]) 
                 where 
                   mcState = execStateT (do replicateM_ iterations mc) 0
-                  bmState = evalStateT mcState (Nothing,nextHalton)
+                  bmState = evalStateT mcState (Nothing,nextRand)
               averagePO = sumOfPayOffs / fromIntegral iterations
               discountPO = averagePO * exp (-0.05)
           print discountPO

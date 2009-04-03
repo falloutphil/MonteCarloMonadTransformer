@@ -33,7 +33,6 @@ reflect (k,f,h) base
 
 
 -- State Monad for PRNG - just to test it
-type Ranq1RandomState = State Word64
 
 convertToWord64 :: Word64 -> Word64
 convertToWord64 = (*2685821657736338717)
@@ -50,31 +49,31 @@ ranq1XorShift v = (xor v) . (shift v)
 ranq1Init :: Word64 -> Word64
 ranq1Init = convertToWord64 . ranq1Increment . ( xor 4101842887655102017 )
 
+type Ranq1RandomState = State Word64
+
 -- This is daft returning a [Double] - just mashing into the Quasi framework for now
-nextRanq1 :: Ranq1RandomState [Double]
-nextRanq1 = do state <- get
-               let !nextState = ranq1Increment state
-                   !andAgain  = ranq1Increment state
-                   !r1 = convertToDouble state 
-                   !r2 = convertToDouble nextState
-               put andAgain
-               return $ r2:r1:[]
+instance RngClass Ranq1RandomState where
+  nextRand = do state <- get
+                let !nextState = ranq1Increment state
+                    !andAgain  = ranq1Increment state
+                    !r1 = convertToDouble state 
+                    !r2 = convertToDouble nextState
+                put andAgain
+                return $ r2:r1:[]
 
-
-
-
+-- What RNG do you want to use?
+type MyRng = QuasiRandomState --Ranq1RandomState
 -- So we are defining a state transform which has state of 'maybe double' and an
 -- operating function for the inner monad of type QuasiRandomMonad returning a [Double]
 -- We then say that it wraps an QuasiRandomMonad (State Monad) - it must of course
 -- if we pass it a function that operates on these Monads we must wrap the same
 -- type of Monad.  And finally it returns a double
+type BoxMullerStateT = StateT (Maybe Double, MyRng [Double])
+type BoxMullerQuasiState = BoxMullerStateT MyRng
 
-type BoxMullerStateT = StateT (Maybe Double, QuasiRandomState [Double])
-type BoxMullerQuasiState = BoxMullerStateT QuasiRandomState
--- type BoxMullerStateT = StateT (Maybe Double, Ranq1RandomState [Double])
--- type BoxMullerQuasiState = BoxMullerStateT Ranq1RandomState
 
-generateNormal :: BoxMullerQuasiState Double
+generateNormal :: BoxMullerQuasiState Double  
+--(RngClass myType) => (StateT (Maybe Double, myType [Double]) myType) Double
 generateNormal = StateT $ \s -> case s of
 				(Just d,qrnFunc) -> return (d,(Nothing,qrnFunc))
 				(Nothing,qrnFunc) -> do qrnBaseList <- qrnFunc
@@ -93,6 +92,7 @@ boxMuller rn1 rn2 = (normal1,normal2)
 type MonteCarloStateT = StateT Double
 
 mc :: MonteCarloStateT BoxMullerQuasiState ()  
+-- (RngClass myType) => MonteCarloStateT (StateT (Maybe Double, myType [Double]) myType) ()
 mc = StateT $ \s -> do nextNormal <- generateNormal
                        let stochastic = 0.2*1*nextNormal
                            drift = 0.05 - (0.5*(0.2*0.2))*1
@@ -118,12 +118,11 @@ iterations = 200000
 main :: IO()
 -- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
 -- is initalised in the outter evalStateT
-main = do let sumOfPayOffs = evalState bmState (1,[3,5]) 
+main = do let sumOfPayOffs = evalState bmState (1,[3,5]) -- (ranq1Init 981110)
                 where 
                   mcState = execStateT (do replicateM_ iterations mc) 0
-                  bmState = evalStateT mcState (Nothing,nextRand)
+                  bmState = evalStateT mcState (Nothing,nextRand) 
               averagePO = sumOfPayOffs / fromIntegral iterations
               discountPO = averagePO * exp (-0.05)
           print discountPO
  
--- (ranq1Init 981110)

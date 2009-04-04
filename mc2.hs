@@ -10,11 +10,11 @@ import Data.Bits (shift,xor)
 class RngClass myType where
   nextRand :: myType [Double] 
 
-type QuasiRandomState = State (Int,[Int])
+type HaltonState = State (Int,[Int])
 
 -- State Monad for QRNGs - stores current iteration and list of
 -- bases to compute
-instance RngClass QuasiRandomState where
+instance RngClass HaltonState where
   nextRand = do (n,bases) <- get
                 let !nextN = n+1
 	        put (nextN,bases)
@@ -49,10 +49,10 @@ ranq1XorShift v = (xor v) . (shift v)
 ranq1Init :: Word64 -> Word64
 ranq1Init = convertToWord64 . ranq1Increment . ( xor 4101842887655102017 )
 
-type Ranq1RandomState = State Word64
+type Ranq1State = State Word64
 
 -- This is daft returning a [Double] - just mashing into the Quasi framework for now
-instance RngClass Ranq1RandomState where
+instance RngClass Ranq1State where
   nextRand = do state <- get
                 let !nextState = ranq1Increment state
                     !andAgain  = ranq1Increment state
@@ -62,23 +62,27 @@ instance RngClass Ranq1RandomState where
                 return $ r2:r1:[]
 
 -- What RNG do you want to use?
-type MyRng = QuasiRandomState --Ranq1RandomState
--- So we are defining a state transform which has state of 'maybe double' and an
--- operating function for the inner monad of type QuasiRandomMonad returning a [Double]
--- We then say that it wraps an QuasiRandomMonad (State Monad) - it must of course
--- if we pass it a function that operates on these Monads we must wrap the same
--- type of Monad.  And finally it returns a double
-type BoxMullerStateT = StateT (Maybe Double, MyRng [Double])
-type BoxMullerQuasiState = BoxMullerStateT MyRng
+type MyRngState = HaltonState --Ranq1State
+-- What Normal generator do we use?
+type MyNormalStateStack = BoxMullerRandomStateStack
 
+-- So we are defining a state transform which has state of 'maybe double'.
+-- We then say that it wraps an QuasiRandomMonad (State Monad) - as an instance
+-- of RngClass we guarenteed a nextRand function.  And finally it returns a double
 
-generateNormal :: BoxMullerQuasiState Double  
---(RngClass myType) => (StateT (Maybe Double, myType [Double]) myType) Double
-generateNormal = StateT $ \s -> case s of
-				(Just d,qrnFunc) -> return (d,(Nothing,qrnFunc))
-				(Nothing,qrnFunc) -> do qrnBaseList <- qrnFunc
-					                let (norm1,norm2) = boxMuller (head qrnBaseList) (head $ tail qrnBaseList)
-					                return (norm1,(Just norm2,qrnFunc))
+-- Typeclass for RNG Types
+class NormalClass myType where
+  generateNormal :: myType Double 
+
+type BoxMullerStateT = StateT (Maybe Double)
+type BoxMullerRandomStateStack = BoxMullerStateT MyRngState
+
+instance NormalClass BoxMullerRandomStateStack where
+  generateNormal = StateT $ \s -> case s of
+	  			Just d  -> return (d,Nothing)
+		  		Nothing -> do qrnBaseList <- nextRand
+					      let (norm1,norm2) = boxMuller (head qrnBaseList) (head $ tail qrnBaseList)
+					      return (norm1,Just norm2)
 
 boxMuller :: Double -> Double -> (Double,Double)
 -- boxMuller rn1 rn2 | trace ( "rn1 " ++ show rn1 ++ " rn2 " ++ show rn2 ) False=undefined 
@@ -90,12 +94,16 @@ boxMuller rn1 rn2 = (normal1,normal2)
     normal2  = r * sin ( twoPiRn2 )
 
 type MonteCarloStateT = StateT Double
+type MonteCarloStateStack =  MonteCarloStateT MyNormalStateStack
 
-mc :: MonteCarloStateT BoxMullerQuasiState ()  
--- (RngClass myType) => MonteCarloStateT (StateT (Maybe Double, myType [Double]) myType) ()
+vol = 0.2
+expiry = 1
+ir = 0.05
+
+mc :: MonteCarloStateStack ()  
 mc = StateT $ \s -> do nextNormal <- generateNormal
-                       let stochastic = 0.2*1*nextNormal
-                           drift = 0.05 - (0.5*(0.2*0.2))*1
+                       let stochastic = vol*expiry*nextNormal
+                           drift = ir - (0.5*(vol*vol))*expiry
                            !newStockSum = payOff 100 ( 100 * exp ( drift + stochastic ) ) Call + s
                        return ((),newStockSum)
 
@@ -118,11 +126,11 @@ iterations = 200000
 main :: IO()
 -- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
 -- is initalised in the outter evalStateT
-main = do let sumOfPayOffs = evalState bmState (1,[3,5]) -- (ranq1Init 981110)
+main = do let sumOfPayOffs = evalState normalState (1,[3,5]) -- (ranq1Init 981110)
                 where 
                   mcState = execStateT (do replicateM_ iterations mc) 0
-                  bmState = evalStateT mcState (Nothing,nextRand) 
+                  normalState = evalStateT mcState Nothing
               averagePO = sumOfPayOffs / fromIntegral iterations
-              discountPO = averagePO * exp (-0.05)
+              discountPO = averagePO * exp (-ir)
           print discountPO
  

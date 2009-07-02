@@ -77,12 +77,23 @@ class NormalClass myType where
 type BoxMullerStateT = StateT (Maybe Double)
 type BoxMullerRandomStateStack = BoxMullerStateT MyRngState
 
+data Dummy = NoState
+type OtherNormalStateT = StateT Dummy
+type OtherRandomStateStack = OtherNormalStateT MyRngState
+
 instance NormalClass BoxMullerRandomStateStack where
   generateNormal = StateT $ \s -> case s of
 	  			Just d  -> return (d,Nothing)
 		  		Nothing -> do qrnBaseList <- nextRand
 					      let (norm1,norm2) = boxMuller (head qrnBaseList) (head $ tail qrnBaseList)
 					      return (norm1,Just norm2)
+
+instance NormalClass OtherRandomStateStack where
+    generateNormal = StateT$ \_ -> do rn:rns <- nextRand 
+                                      return ( other rn, NoState )
+
+other :: Double -> Double
+other rn = rn
 
 boxMuller :: Double -> Double -> (Double,Double)
 -- boxMuller rn1 rn2 | trace ( "rn1 " ++ show rn1 ++ " rn2 " ++ show rn2 ) False=undefined 
@@ -122,7 +133,7 @@ payOff strike stock putcall | profit > 0 = profit
     profit = (putCallMult putcall)*(stock - strike)
 
 
-iterations = 200000
+iterations = 20000
 main :: IO()
 -- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
 -- is initalised in the outter evalStateT

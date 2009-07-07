@@ -64,7 +64,7 @@ instance RngClass Ranq1State where
 -- What RNG do you want to use?
 type MyRngState = HaltonState --Ranq1State
 -- What Normal generator do we use?
-type MyNormalStateStack = BoxMullerRandomStateStack
+type MyNormalStateStack = OtherRandomStateStack --BoxMullerRandomStateStack
 
 -- So we are defining a state transform which has state of 'maybe double'.
 -- We then say that it wraps an QuasiRandomMonad (State Monad) - as an instance
@@ -77,8 +77,7 @@ class NormalClass myType where
 type BoxMullerStateT = StateT (Maybe Double)
 type BoxMullerRandomStateStack = BoxMullerStateT MyRngState
 
-data Dummy = NoState
-type OtherNormalStateT = StateT Dummy
+type OtherNormalStateT = StateT ()
 type OtherRandomStateStack = OtherNormalStateT MyRngState
 
 instance NormalClass BoxMullerRandomStateStack where
@@ -89,8 +88,8 @@ instance NormalClass BoxMullerRandomStateStack where
 					      return (norm1,Just norm2)
 
 instance NormalClass OtherRandomStateStack where
-    generateNormal = StateT$ \_ -> do rn:rns <- nextRand 
-                                      return ( other rn, NoState )
+    generateNormal = StateT $ \_ -> do rn:rns <- nextRand 
+                                       return ( other rn, () )
 
 other :: Double -> Double
 other rn = rn
@@ -140,7 +139,7 @@ main :: IO()
 main = do let sumOfPayOffs = evalState normalState (1,[3,5]) -- (ranq1Init 981110)
                 where 
                   mcState = execStateT (do replicateM_ iterations mc) 0
-                  normalState = evalStateT mcState Nothing
+                  normalState = evalStateT mcState () -- Nothing
               averagePO = sumOfPayOffs / fromIntegral iterations
               discountPO = averagePO * exp (-ir)
           print discountPO

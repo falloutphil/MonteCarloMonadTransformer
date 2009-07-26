@@ -64,7 +64,7 @@ instance RngClass Ranq1State where
 -- What RNG do you want to use?
 type MyRngState = HaltonState --Ranq1State
 -- What Normal generator do we use?
-type MyNormalStateStack = OtherRandomStateStack --BoxMullerRandomStateStack
+type MyNormalStateStack = BoxMullerRandomStateStack
 
 -- So we are defining a state transform which has state of 'maybe double'.
 -- We then say that it wraps an QuasiRandomMonad (State Monad) - as an instance
@@ -132,14 +132,14 @@ payOff strike stock putcall | profit > 0 = profit
     profit = (putCallMult putcall)*(stock - strike)
 
 
-iterations = 20000
+iterations = 20000000
 main :: IO()
 -- sumOfPayOffs is a mc monad evaluated with box muller which in turn is evaluated using Halton which
 -- is initalised in the outter evalStateT
 main = do let sumOfPayOffs = evalState normalState (1,[3,5]) -- (ranq1Init 981110)
                 where 
                   mcState = execStateT (do replicateM_ iterations mc) 0
-                  normalState = evalStateT mcState () -- Nothing
+                  normalState = evalStateT mcState Nothing
               averagePO = sumOfPayOffs / fromIntegral iterations
               discountPO = averagePO * exp (-ir)
           print discountPO

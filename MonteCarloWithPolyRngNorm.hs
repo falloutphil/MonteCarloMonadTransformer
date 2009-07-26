@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 
 import Control.Monad.State.Strict
 import Data.Word (Word64)
@@ -53,9 +54,9 @@ newtype Halton = Halton Int
 -- allows us to avoid carrying around the constant dimensions
 -- as part of the (variable) state.
 instance RngClass Halton where
-  rngStateFn dims = let bases = take dims primes
-                      in State $ \(Halton s) -> (map (reflect (s,1,0)) bases,Halton (s+1))
-
+  rngStateFn dims = let bases = take dims primes 
+                      in State $ \(Halton s) -> let !nextState = (s+1) in (map (reflect (s,1,0)) bases,Halton nextState)
+                      
 -- Ranq1 Implementation
 
 newtype Ranq1 = Ranq1 Word64
@@ -87,7 +88,7 @@ multiRanq1 (vector,state) dims | dims <= 0 = (reverse vector,state)
                                                   newState  = ranq1Increment state 
                                                
 instance RngClass Ranq1 where
-   rngStateFn dims = State $ \(Ranq1 s) -> let (vector,state) = multiRanq1 ([],s) dims
+   rngStateFn dims = State $ \(Ranq1 s) -> let (vector,!state) = multiRanq1 ([],s) dims
                                               in (vector, Ranq1 state)
 
 
@@ -249,7 +250,7 @@ getRngFn (StateRanq1  ranq1)  = result ranq1
 
 
 main :: IO()
-main = do putStrLn "Random Number Generator?"
+main = do {-putStrLn "Random Number Generator?"
           userRng <- getLine
           putStrLn "Normal Generator?"
           userNorm <- getLine
@@ -274,8 +275,17 @@ main = do putStrLn "Random Number Generator?"
                                               volatility   = read(userVolatility),  
                                               expiry       = read(userExpiry), 
                                               interestRate = read(userInterestRate), 
-                                              iterations   = read(userIterations) }                            
-              
+                                              iterations   = read(userIterations) }   -}    
+
+          let userData = MonteCarloUserData { strike       = 100, 
+                                              underlying   = 100, 
+                                              putCall      = Call,
+                                              volatility   = 0.2,  
+                                              expiry       = 1, 
+                                              interestRate = 0.05, 
+                                              iterations   = 20000000 }                      
+              userRng = "Halton"
+              userNorm = "Box Muller"
               sumOfPayOffs     = getResultFn (rngChooser userRng) (normalChooser userNorm) $ userData
               averagePayOff    = sumOfPayOffs / fromIntegral (iterations userData)
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData)

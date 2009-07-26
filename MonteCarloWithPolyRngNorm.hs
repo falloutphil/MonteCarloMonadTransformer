@@ -184,6 +184,7 @@ normalChooser normStr | normStr == "Box Muller" = StateBoxMuller (BoxMuller Noth
                       | otherwise               = StateBoxMuller (BoxMuller Nothing)
 
 
+
 -- Monte Carlo
 
 
@@ -228,11 +229,23 @@ result initRngState initNormState userData = evalState normalState initRngState
                                                       mcState = execStateT ( do replicateM_ (iterations userData) (mc userData)) 0
 
 -- Yuk, the last bit of boilerplate!
-getResult :: RngType -> NormalType -> MonteCarloUserData -> Double
-getResult (StateHalton halton) (StateBoxMuller bm) mcData = result halton bm mcData
-getResult (StateRanq1  ranq1)  (StateBoxMuller bm) mcData = result ranq1 bm mcData
-getResult (StateHalton halton) (StateAcklam ack)   mcData = result halton ack mcData
-getResult (StateRanq1  ranq1)  (StateAcklam ack)   mcData = result ranq1 ack mcData
+-- Returns a function takes the user data 
+-- and produces a result.
+getResultFn :: RngType -> NormalType -> ( MonteCarloUserData -> Double )
+getResultFn rng (StateBoxMuller bm) = getRngFn rng $ bm
+getResultFn rng (StateAcklam ack)   = getRngFn rng $ ack 
+
+-- Separating the decision across two functionals
+-- reduces the amount of boilerplate.
+-- Consider if we have 3 rngs and 3 normal generators
+-- then under one functional we would have 3x3=9 combinations.
+-- This way we only speicfy each type once wo we have 3+3=6 combinations.
+-- Another way to think of is that if we added a new Rng we would only
+-- have to update the below function with 1 line.  If it was done
+-- in one function we would have a case for each NormalType.
+getRngFn :: NormalClass a => RngType -> ( a -> MonteCarloUserData -> Double )
+getRngFn (StateHalton halton) = result halton
+getRngFn (StateRanq1  ranq1)  = result ranq1
 
 
 main :: IO()
@@ -263,7 +276,7 @@ main = do putStrLn "Random Number Generator?"
                                               interestRate = read(userInterestRate), 
                                               iterations   = read(userIterations) }                            
               
-              sumOfPayOffs     = getResult (rngChooser userRng) (normalChooser userNorm) userData
+              sumOfPayOffs     = getResultFn (rngChooser userRng) (normalChooser userNorm) $ userData
               averagePayOff    = sumOfPayOffs / fromIntegral (iterations userData)
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData)
           putStrLn "Result:"

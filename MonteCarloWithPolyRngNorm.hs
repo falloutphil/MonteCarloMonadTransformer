@@ -186,13 +186,17 @@ normalChooser normStr | normStr == "Box Muller" = StateBoxMuller (BoxMuller Noth
 
 -- Monte Carlo
 
-vol = 0.2
-expiry = 1
-ir = 0.05
 
-data PutCall = Put
-             | Call
-               deriving (Eq, Show)
+data MonteCarloUserData = MonteCarloUserData { strike       :: Double,
+                                               underlying   :: Double,
+                                               putCall      :: PutCall,
+                                               volatility   :: Double,
+                                               expiry       :: Double,
+                                               interestRate :: Double,
+                                               iterations   :: Int }
+
+data PutCall = Put | Call
+               deriving (Read)
 
 putCallMult :: Num a => PutCall -> a
 putCallMult Call = 1
@@ -204,28 +208,31 @@ payOff strike stock putcall | profit > 0 = profit
   where
     profit = (putCallMult putcall)*(stock - strike)
 
-mc :: NormalClass a => RngClass b => StateT Double (StateT a (State b)) ()
-mc = StateT $ \s -> do norm <- nextNormal
-                       let stochastic = vol*expiry*norm
-                           drift = ir - (0.5*(vol*vol))*expiry
-                           !newStockSum = payOff 100 ( 100 * exp ( drift + stochastic ) ) Call + s
-                       return ((),newStockSum)
-
-iterations = 10000
+mc :: NormalClass a => RngClass b => MonteCarloUserData -> StateT Double (StateT a (State b)) ()
+mc userData = StateT $ \s -> do norm <- nextNormal
+                                let vol  = volatility userData
+                                    expy = expiry userData
+                                    stochastic = vol*expy*norm
+                                    drift = (interestRate userData) - (0.5*(vol*vol))*expy
+                                    !newStockSum = payOff (strike userData) 
+                                                          ((underlying userData) * exp ( drift + stochastic )) 
+                                                          (putCall userData)
+                                                   + s
+                                return ((),newStockSum)
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
-result :: RngClass a => NormalClass b => a -> b -> Double
-result initRngState initNormState = evalState normalState initRngState
-                                         where normalState = evalStateT mcState initNormState
-                                               mcState = execStateT ( do replicateM_ iterations mc) 0
+result :: RngClass a => NormalClass b => a -> b -> MonteCarloUserData -> Double
+result initRngState initNormState userData = evalState normalState initRngState
+                                                where normalState = evalStateT mcState initNormState
+                                                      mcState = execStateT ( do replicateM_ (iterations userData) (mc userData)) 0
 
 -- Yuk, the last bit of boilerplate!
-getResult :: RngType -> NormalType -> Double
-getResult (StateHalton halton) (StateBoxMuller bm)  = result halton bm
-getResult (StateRanq1  ranq1)  (StateBoxMuller bm)  = result ranq1 bm
-getResult (StateHalton halton) (StateAcklam ack)    = result halton ack
-getResult (StateRanq1  ranq1)  (StateAcklam ack)    = result ranq1 ack
+getResult :: RngType -> NormalType -> MonteCarloUserData -> Double
+getResult (StateHalton halton) (StateBoxMuller bm) mcData = result halton bm mcData
+getResult (StateRanq1  ranq1)  (StateBoxMuller bm) mcData = result ranq1 bm mcData
+getResult (StateHalton halton) (StateAcklam ack)   mcData = result halton ack mcData
+getResult (StateRanq1  ranq1)  (StateAcklam ack)   mcData = result ranq1 ack mcData
 
 
 main :: IO()
@@ -233,9 +240,32 @@ main = do putStrLn "Random Number Generator?"
           userRng <- getLine
           putStrLn "Normal Generator?"
           userNorm <- getLine
-          let sumOfPayOffs     = getResult (rngChooser userRng) (normalChooser userNorm)
-              averagePayOff    = sumOfPayOffs / fromIntegral iterations
-              discountedPayOff = averagePayOff * exp (-ir)
+          putStrLn "Strike?"
+          userStrike <- getLine
+          putStrLn "Underlying Price?"
+          userUnderlying <- getLine
+          putStrLn "Put or Call?"
+          userPutCall <- getLine
+          putStrLn "Volatility?"
+          userVolatility <- getLine
+          putStrLn "Expiry?"
+          userExpiry <- getLine
+          putStrLn "Interest Rate?"
+          userInterestRate <- getLine
+          putStrLn "Iterations?"
+          userIterations <- getLine
+
+          let userData = MonteCarloUserData { strike       = read(userStrike), 
+                                              underlying   = read(userUnderlying), 
+                                              putCall      = read(userPutCall),
+                                              volatility   = read(userVolatility),  
+                                              expiry       = read(userExpiry), 
+                                              interestRate = read(userInterestRate), 
+                                              iterations   = read(userIterations) }                            
+              
+              sumOfPayOffs     = getResult (rngChooser userRng) (normalChooser userNorm) userData
+              averagePayOff    = sumOfPayOffs / fromIntegral (iterations userData)
+              discountedPayOff = averagePayOff * exp (-1 * interestRate userData)
           putStrLn "Result:"
           print discountedPayOff
 

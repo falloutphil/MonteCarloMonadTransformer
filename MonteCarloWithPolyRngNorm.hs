@@ -195,7 +195,8 @@ data MonteCarloUserData = MonteCarloUserData { strike       :: Double,
                                                volatility   :: Double,
                                                expiry       :: Double,
                                                interestRate :: Double,
-                                               timeSteps    :: Int }
+                                               timeSteps    :: Int,
+                                               evolveFn     :: MonteCarloUserData -> (Double -> Double -> Double) }
 
 data PutCall = Put | Call
                deriving (Read)
@@ -210,17 +211,17 @@ payOff strike stock putcall | profit > 0 = profit
   where
     profit = (putCallMult putcall)*(stock - strike)
 
-mc :: NormalClass a => RngClass b => MonteCarloUserData -> StateT Double (StateT a (State b)) ()
-mc userData = StateT $ \s -> do norm <- nextNormal 
-                                return ((), evolve s norm userData)
+mc :: NormalClass a => RngClass b => (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
+mc evolver = StateT $ \s -> do norm <- nextNormal 
+                               return ((), evolver s norm)
 
 
-evolve :: Double -> Double -> MonteCarloUserData -> Double
-evolve currentValue normal userData = let vol  = volatility userData
-                                          expy = expiry userData
-                                          stochastic = vol * normal * sqrt expy
-                                          drift = (interestRate userData) - (0.5*(vol*vol))*expy
-                                         in currentValue * exp ( drift + stochastic )
+evolveClosedForm :: MonteCarloUserData -> (Double -> Double -> Double)
+evolveClosedForm userData currentValue normal = let vol  = volatility userData
+                                                    expy = expiry userData
+                                                    stochastic = vol * normal * sqrt expy
+                                                    drift = (interestRate userData) - (0.5*(vol*vol))*expy
+                                                   in currentValue * exp ( drift + stochastic )
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
@@ -228,7 +229,7 @@ singleResult :: RngClass a => NormalClass b => a -> b -> MonteCarloUserData -> (
 singleResult initRngState initNormState userData = 
          let (((mc_a,mc_s), norm_s), rng_s) = runState rngMonad initRngState
                                                  where rngMonad = runStateT normMonadT initNormState
-                                                       normMonadT = runStateT ( do replicateM_ (timeSteps userData) (mc userData)) (underlying userData)
+                                                       normMonadT = runStateT ( do replicateM_ (timeSteps userData) (mc $ evolveFn userData $ userData)) (underlying userData)
             in (mc_s, (rng_s,norm_s))
                                                      
 
@@ -294,8 +295,9 @@ main = do {-putStrLn "Random Number Generator?"
                                               volatility   = 0.2,  
                                               expiry       = 1, 
                                               interestRate = 0.05,
-                                              timeSteps    = 1 }                      
-              numOfSims = 20000000
+                                              timeSteps    = 1,
+                                              evolveFn     = evolveClosedForm }                      
+              numOfSims = 1000000
               userRng = "Halton"
               userNorm = "Box Muller"
               sumOfPayOffs     = getResultFn numOfSims (rngChooser userRng) (normalChooser userNorm) $ userData

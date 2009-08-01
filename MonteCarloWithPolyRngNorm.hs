@@ -195,7 +195,7 @@ data MonteCarloUserData = MonteCarloUserData { strike       :: Double,
                                                volatility   :: Double,
                                                expiry       :: Double,
                                                interestRate :: Double,
-                                               iterations   :: Int }
+                                               timeSteps    :: Int }
 
 data PutCall = Put | Call
                deriving (Read)
@@ -211,42 +211,53 @@ payOff strike stock putcall | profit > 0 = profit
     profit = (putCallMult putcall)*(stock - strike)
 
 mc :: NormalClass a => RngClass b => MonteCarloUserData -> StateT Double (StateT a (State b)) ()
-mc userData = StateT $ \s -> do norm <- nextNormal
-                                let vol  = volatility userData
-                                    expy = expiry userData
-                                    stochastic = vol*expy*norm
-                                    drift = (interestRate userData) - (0.5*(vol*vol))*expy
-                                    !newStockSum = payOff (strike userData) 
-                                                          ((underlying userData) * exp ( drift + stochastic )) 
-                                                          (putCall userData)
-                                                   + s
-                                return ((),newStockSum)
+mc userData = StateT $ \s -> do norm <- nextNormal 
+                                return ((), evolve s norm userData)
+
+
+evolve :: Double -> Double -> MonteCarloUserData -> Double
+evolve currentValue normal userData = let vol  = volatility userData
+                                          expy = expiry userData
+                                          stochastic = vol * normal * sqrt expy
+                                          drift = (interestRate userData) - (0.5*(vol*vol))*expy
+                                         in currentValue * exp ( drift + stochastic )
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
-result :: RngClass a => NormalClass b => a -> b -> MonteCarloUserData -> Double
-result initRngState initNormState userData = evalState normalState initRngState
-                                                where normalState = evalStateT mcState initNormState
-                                                      mcState = execStateT ( do replicateM_ (iterations userData) (mc userData)) 0
+singleResult :: RngClass a => NormalClass b => a -> b -> MonteCarloUserData -> ( Double, (a,b) )
+singleResult initRngState initNormState userData = 
+         let (((mc_a,mc_s), norm_s), rng_s) = runState rngMonad initRngState
+                                                 where rngMonad = runStateT normMonadT initNormState
+                                                       normMonadT = runStateT ( do replicateM_ (timeSteps userData) (mc userData)) (underlying userData)
+            in (mc_s, (rng_s,norm_s))
+                                                     
+
+simResult :: RngClass a => NormalClass b => Int -> Double -> a -> b -> MonteCarloUserData -> Double
+simResult numOfSims runTotal initRng initNorm userData | numOfSims <= 0 = runTotal
+                                                       | otherwise = let (!value,(!rngS,!normS)) = singleResult initRng initNorm userData
+                                                                         !newNumOfSims = numOfSims - 1
+                                                                         !newRunTotal = runTotal + payOff (strike userData) value (putCall userData)
+                                                                        in simResult newNumOfSims newRunTotal rngS normS userData
+
 
 -- Yuk, the last bit of boilerplate!
 -- Returns a function takes the user data 
 -- and produces a result.
-getResultFn :: RngType -> NormalType -> ( MonteCarloUserData -> Double )
-getResultFn rng (StateBoxMuller bm) = getRngFn rng $ bm
-getResultFn rng (StateAcklam ack)   = getRngFn rng $ ack 
+getResultFn :: Int -> RngType -> NormalType -> ( MonteCarloUserData -> Double )
+getResultFn numOfSims rng (StateBoxMuller bm) = getRngFn numOfSims rng $ bm
+getResultFn numOfSims rng (StateAcklam ack)   = getRngFn numOfSims rng $ ack
 
 -- Separating the decision across two functionals
 -- reduces the amount of boilerplate.
 -- Consider if we have 3 rngs and 3 normal generators
 -- then under one functional we would have 3x3=9 combinations.
--- This way we only speicfy each type once wo we have 3+3=6 combinations.
+-- This way we only speicfy each type once, we have 3+3=6 combinations.
 -- Another way to think of is that if we added a new Rng we would only
 -- have to update the below function with 1 line.  If it was done
 -- in one function we would have a case for each NormalType.
-getRngFn :: NormalClass a => RngType -> ( a -> MonteCarloUserData -> Double )
-getRngFn (StateHalton halton) = result halton
-getRngFn (StateRanq1  ranq1)  = result ranq1
+getRngFn :: NormalClass a => Int -> RngType -> ( a -> MonteCarloUserData -> Double)
+getRngFn numOfSims (StateHalton halton) = simResult numOfSims 0 halton 
+getRngFn numOfSims (StateRanq1  ranq1)  = simResult numOfSims 0 ranq1  
 
 
 main :: IO()
@@ -282,12 +293,13 @@ main = do {-putStrLn "Random Number Generator?"
                                               putCall      = Call,
                                               volatility   = 0.2,  
                                               expiry       = 1, 
-                                              interestRate = 0.05, 
-                                              iterations   = 20000000 }                      
+                                              interestRate = 0.05,
+                                              timeSteps    = 1 }                      
+              numOfSims = 20000000
               userRng = "Halton"
               userNorm = "Box Muller"
-              sumOfPayOffs     = getResultFn (rngChooser userRng) (normalChooser userNorm) $ userData
-              averagePayOff    = sumOfPayOffs / fromIntegral (iterations userData)
+              sumOfPayOffs     = getResultFn numOfSims (rngChooser userRng) (normalChooser userNorm) $ userData
+              averagePayOff    = sumOfPayOffs / fromIntegral numOfSims
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData)
           putStrLn "Result:"
           print discountedPayOff

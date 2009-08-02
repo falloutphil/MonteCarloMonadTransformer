@@ -9,13 +9,22 @@ import Data.Bits (shift,xor)
 -- as all values are going to be used, boxing is pointless.
 import Data.Array.Unboxed
 
+import Debug.Trace
+
+-- Trace internal varaibles just like function
+-- parameters. 
+tracePassThrough :: Show a => a -> String -> a
+--tracePassThrough value string
+-- | trace ( "Debug: " ++ string ++ " " ++ show value ) False = undefined
+tracePassThrough value string = value
+
 
 -- Classtype insists we produce a functional
 -- that returns a State monad which returns
 -- a list of doubles (n-dimensional random vector)
 class RngClass a where
   rngStateFn :: Int -> State a [Double]
-
+  
 -- Halton Implementation
 
 type ReflectionState = (Int,Double,Double)
@@ -46,7 +55,9 @@ primes = sieve [3..]
 -- a *new* type exclusive of, but synonmous
 -- with an int.  We reduce this to an Int
 -- once we've drilled through the polymorphism.
+-- deriving(Show) needed to use with trace function.
 newtype Halton = Halton Int
+  deriving(Show)
 
 -- Each instance produces a lambda function on
 -- the fly which is hardcoded to the chosen number
@@ -54,38 +65,49 @@ newtype Halton = Halton Int
 -- allows us to avoid carrying around the constant dimensions
 -- as part of the (variable) state.
 instance RngClass Halton where
-  rngStateFn dims = let bases = take dims primes 
-                      in State $ \(Halton s) -> let !nextState = (s+1) in (map (reflect (s,1,0)) bases,Halton nextState)
+  rngStateFn dims = 
+     let bases = take dims primes 
+        in State $ \(Halton s) -> let !nextState = (s+1) 
+                                     in ((reflect(s,1,0) 3):(reflect(s,1,0) 5):[], Halton nextState)
+                                     --in (map (reflect (s,1,0)) bases,Halton nextState)
                       
 -- Ranq1 Implementation
 
 newtype Ranq1 = Ranq1 Word64
+   deriving(Show)
 
 convertToWord64 :: Word64 -> Word64
 convertToWord64 = (*2685821657736338717)
 
 convertToDouble :: Word64 -> Double
-convertToDouble = (*5.42101086242752217E-20) . fromIntegral . convertToWord64
+convertToDouble = (*5.42101086242752217E-20) . 
+                  fromIntegral               . 
+                  convertToWord64
   
 ranq1Increment :: Word64 -> Word64
-ranq1Increment =  ( `ranq1XorShift` (-4) ) . ( `ranq1XorShift` 35 ) . ( `ranq1XorShift` (-21) )   
+ranq1Increment =  ( `ranq1XorShift` (-4) ) . 
+                  ( `ranq1XorShift` 35 )   . 
+                  ( `ranq1XorShift` (-21) )   
 
 ranq1XorShift :: Word64 -> Int -> Word64
 ranq1XorShift v = (xor v) . (shift v)
  
 ranq1Init :: Word64 -> Word64
-ranq1Init = convertToWord64 . ranq1Increment . ( xor 4101842887655102017 )
+ranq1Init = convertToWord64 . 
+            ranq1Increment  . 
+            ( xor 4101842887655102017 )
 
 -- Reversing isn't ideal - but it is better than appending to the end each time.
 -- The list is only rebuilt once with a reverse and will be O(Dimensions).
 -- Not expecting a huge amount of dimensions, so this will suffice for now.
 -- http://www.haskell.org/pipermail/beginners/2009-February/000882.html
 multiRanq1 :: ([Double],Word64) -> Int -> ([Double], Word64)
-multiRanq1 (vector,state) dims | dims <= 0 = (reverse vector,state)
-                               | otherwise = multiRanq1 (newVector,newState) (dims-1)
-                                               where
-                                                  newVector = convertToDouble state : vector
-                                                  newState  = ranq1Increment state 
+multiRanq1 (vector,state) dims 
+   | dims <= 0 = (reverse vector,state)
+   | otherwise = multiRanq1 (newVector,newState) (dims-1)
+                    where
+                       newVector = convertToDouble state : vector
+                       newState  = ranq1Increment state 
                                                
 instance RngClass Ranq1 where
    rngStateFn dims = State $ \(Ranq1 s) -> let (vector,!state) = multiRanq1 ([],s) dims
@@ -103,16 +125,19 @@ data RngType = StateHalton Halton |
 -- Create a StateType containing the underlying
 -- inital state of our RNG depedning on user input.
 rngChooser :: String -> RngType
-rngChooser rngStr | rngStr == "Halton" = StateHalton (Halton 1)
-                  | rngStr == "Ranq1"  = StateRanq1  (Ranq1 (ranq1Init 1))
-                  | otherwise          = StateHalton (Halton 1)
+rngChooser rngStr 
+   | rngStr == "Halton" = StateHalton (Halton 1)
+   | rngStr == "Ranq1"  = StateRanq1  (Ranq1 (ranq1Init 1))
+   | otherwise          = StateHalton (Halton 1)
 
 
 
 -- Now for Normals
 
 newtype BoxMuller = BoxMuller (Maybe Double)
+   deriving (Show)
 newtype Acklam    = Acklam ()
+   deriving (Show)
 
 data NormalType = StateBoxMuller BoxMuller |
                   StateAcklam    Acklam
@@ -131,11 +156,12 @@ boxMuller rn1 rn2 = (normal1,normal2)
     normal2  = r * sin ( twoPiRn2 )
  
 instance NormalClass BoxMuller where
-   nextNormal = StateT $ \(BoxMuller s) ->  case s of
-                                               Just d  -> return (d,BoxMuller Nothing)
-	                                       Nothing -> do rn1:rn2:rns <- (rngStateFn 2)
-	                                                     let (norm1,norm2) = boxMuller rn1 rn2
-				                             return (norm1,BoxMuller (Just norm2))
+   nextNormal = 
+      StateT $ \(BoxMuller s) ->  case s of
+                                     Just d  -> return (d,BoxMuller Nothing)
+	                             Nothing -> do rn1:rn2:rns <- (rngStateFn 2)
+	                                           let (norm1,norm2) = boxMuller rn1 rn2
+				                   return (norm1,BoxMuller (Just norm2))
 
 
 -- Peter Acklam's method
@@ -159,17 +185,25 @@ d = listArray (1, 4) [7.784695709041462e-03,  3.224671290700398e-01,
 
 
 invnorm :: Double -> Double
-invnorm p | p < 0.02425 = let q = sqrt ( -2*log(p) ) 
-                          in (((((c!1*q+c!2)*q+c!3)*q+c!4)*q+c!5)*q+c!6) / ((((d!1*q+d!2)*q+d!3)*q+d!4)*q+1)
+invnorm p 
+   | p < 0.02425 = 
+      let q = sqrt ( -2*log(p) ) 
+         in (((((c!1*q+c!2)*q+c!3)*q+c!4)*q+c!5)*q+c!6) / 
+            ((((d!1*q+d!2)*q+d!3)*q+d!4)*q+1)
                           
                             
-          | p > (1-0.02425) = let q = sqrt ( -2*log(1-p) ) 
-                              in -(((((c!1*q+c!2)*q+c!3)*q+c!4)*q+c!5)*q+c!6) / ((((d!1*q+d!2)*q+d!3)*q+d!4)*q+1)
+   | p > (1-0.02425) = 
+      let q = sqrt ( -2*log(1-p) ) 
+         in -(((((c!1*q+c!2)*q+c!3)*q+c!4)*q+c!5)*q+c!6) / 
+            ((((d!1*q+d!2)*q+d!3)*q+d!4)*q+1)
                               
 
-          | otherwise = let q = p-0.5
-                            r = q*q
-                        in (((((a!1*r+a!2)*r+a!3)*r+a!4)*r+a!5)*r+a!6)*q / (((((b!1*r+b!2)*r+b!3)*r+b!4)*r+b!5)*r+1) 
+   | otherwise = 
+      let q = p-0.5
+          r = q*q
+         in (((((a!1*r+a!2)*r+a!3)*r+a!4)*r+a!5)*r+a!6)*q / 
+            (((((b!1*r+b!2)*r+b!3)*r+b!4)*r+b!5)*r+1) 
+
                             
 -- Acklam's method doesn't require any 
 -- state so we are effectively creating
@@ -180,23 +214,25 @@ instance NormalClass Acklam where
                                   return ( invnorm rn, Acklam () )
 
 normalChooser :: String -> NormalType
-normalChooser normStr | normStr == "Box Muller" = StateBoxMuller (BoxMuller Nothing)
-                      | normStr == "Acklam"     = StateAcklam (Acklam () )
-                      | otherwise               = StateBoxMuller (BoxMuller Nothing)
+normalChooser normStr 
+   | normStr == "Box Muller" = StateBoxMuller (BoxMuller Nothing)
+   | normStr == "Acklam"     = StateAcklam (Acklam () )
+   | otherwise               = StateBoxMuller (BoxMuller Nothing)
 
 
 
 -- Monte Carlo
 
 
-data MonteCarloUserData = MonteCarloUserData { strike       :: Double,
-                                               underlying   :: Double,
-                                               putCall      :: PutCall,
-                                               volatility   :: Double,
-                                               expiry       :: Double,
-                                               interestRate :: Double,
-                                               timeSteps    :: Int,
-                                               evolveFn     :: MonteCarloUserData -> (Double -> Double -> Double) }
+data MonteCarloUserData = MonteCarloUserData 
+   { strike       :: Double,
+     underlying   :: Double,
+     putCall      :: PutCall,
+     volatility   :: Double,
+     expiry       :: Double,
+     interestRate :: Double,
+     timeSteps    :: Int,
+     evolveFn     :: MonteCarloUserData -> (Double -> Double -> Double) }
 
 data PutCall = Put | Call
                deriving (Read)
@@ -211,34 +247,58 @@ payOff strike stock putcall | profit > 0 = profit
   where
     profit = (putCallMult putcall)*(stock - strike)
 
-mc :: NormalClass a => RngClass b => (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
+mc :: NormalClass a => RngClass b => 
+     (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
 mc evolver = StateT $ \s -> do norm <- nextNormal 
                                return ((), evolver s norm)
 
 
 evolveClosedForm :: MonteCarloUserData -> (Double -> Double -> Double)
-evolveClosedForm userData currentValue normal = let vol  = volatility userData
-                                                    expy = expiry userData
-                                                    stochastic = vol * normal * sqrt expy
-                                                    drift = (interestRate userData) - (0.5*(vol*vol))*expy
-                                                   in currentValue * exp ( drift + stochastic )
+evolveClosedForm userData currentValue normal
+   | trace ( "   currentValue " ++ show currentValue ++ " normal " ++ show normal ) False=undefined 
+evolveClosedForm userData currentValue normal = 
+   let vol        = volatility userData
+       delta_t    = expiry userData / fromIntegral (timeSteps userData)
+       stochastic = vol * normal * sqrt delta_t
+       drift      = ( (interestRate userData) - (0.5*vol*vol) )*delta_t
+      in currentValue * exp ( drift + stochastic )
+
+evolveStandard :: MonteCarloUserData -> (Double -> Double -> Double)
+--evolveStandard userData currentValue normal
+--   | trace ( "   currentValue " ++ show currentValue ++ " normal " ++ show normal ) False=undefined 
+evolveStandard userData currentValue normal = 
+   let vol        = volatility userData
+       delta_t    = expiry userData / fromIntegral (timeSteps userData)
+       stochastic = vol * normal * sqrt delta_t
+       drift      = (interestRate userData) * delta_t
+      in currentValue * ( 1 + drift + stochastic)
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
-singleResult :: RngClass a => NormalClass b => a -> b -> MonteCarloUserData -> ( Double, (a,b) )
+singleResult :: RngClass a => NormalClass b => -- Show a =>
+                a -> b -> MonteCarloUserData -> ( Double, (a,b) )
+--singleResult initRngState initNormState userData 
+--   | trace ( "   initRngState " ++ show initRngState ) False=undefined 
 singleResult initRngState initNormState userData = 
-         let (((mc_a,mc_s), norm_s), rng_s) = runState rngMonad initRngState
-                                                 where rngMonad = runStateT normMonadT initNormState
-                                                       normMonadT = runStateT ( do replicateM_ (timeSteps userData) (mc $ evolveFn userData $ userData)) (underlying userData)
-            in (mc_s, (rng_s,norm_s))
+   let (((mc_a,mc_s), norm_s), rng_s) = runState rngMonad initRngState
+         where rngMonad     = runStateT normMonadT initNormState
+               evolve       = evolveFn userData $ userData
+               mcCombinator = do replicateM_ (timeSteps userData) (mc evolve)
+               normMonadT   = runStateT mcCombinator (underlying userData)
+      in (mc_s, (rng_s,norm_s))
                                                      
 
-simResult :: RngClass a => NormalClass b => Int -> Double -> a -> b -> MonteCarloUserData -> Double
-simResult numOfSims runTotal initRng initNorm userData | numOfSims <= 0 = runTotal
-                                                       | otherwise = let (!value,(!rngS,!normS)) = singleResult initRng initNorm userData
-                                                                         !newNumOfSims = numOfSims - 1
-                                                                         !newRunTotal = runTotal + payOff (strike userData) value (putCall userData)
-                                                                        in simResult newNumOfSims newRunTotal rngS normS userData
+simResult :: RngClass a => NormalClass b => Show a => Show b =>
+             Int -> Double -> a -> b -> MonteCarloUserData -> Double
+--simResult numOfSims runTotal initRng initNorm userData  
+--   | trace ( "numOfSims " ++ show numOfSims ++ "   initRng " ++ show initRng ) False=undefined 
+simResult numOfSims runTotal initRng initNorm userData 
+   | numOfSims <= 1 = runTotal
+   | otherwise = let (!value,(!rngS,!normS)) = singleResult initRng initNorm userData
+                     !newNumOfSims           = numOfSims - 1
+                     profit                  = tracePassThrough (payOff (strike userData) value (putCall userData)) "Pay off"
+                     !newRunTotal            = runTotal + profit
+                    in simResult newNumOfSims newRunTotal rngS normS userData
 
 
 -- Yuk, the last bit of boilerplate!
@@ -256,7 +316,8 @@ getResultFn numOfSims rng (StateAcklam ack)   = getRngFn numOfSims rng $ ack
 -- Another way to think of is that if we added a new Rng we would only
 -- have to update the below function with 1 line.  If it was done
 -- in one function we would have a case for each NormalType.
-getRngFn :: NormalClass a => Int -> RngType -> ( a -> MonteCarloUserData -> Double)
+getRngFn :: NormalClass a => Show a =>
+            Int -> RngType -> ( a -> MonteCarloUserData -> Double)
 getRngFn numOfSims (StateHalton halton) = simResult numOfSims 0 halton 
 getRngFn numOfSims (StateRanq1  ranq1)  = simResult numOfSims 0 ranq1  
 
@@ -295,12 +356,14 @@ main = do {-putStrLn "Random Number Generator?"
                                               volatility   = 0.2,  
                                               expiry       = 1, 
                                               interestRate = 0.05,
-                                              timeSteps    = 1,
-                                              evolveFn     = evolveClosedForm }                      
-              numOfSims = 1000000
-              userRng = "Halton"
-              userNorm = "Box Muller"
-              sumOfPayOffs     = getResultFn numOfSims (rngChooser userRng) (normalChooser userNorm) $ userData
+                                              timeSteps    = 1000,
+                                              evolveFn     = evolveStandard }                      
+              numOfSims = 10000
+              userRng = "Ranq1"
+              userNorm = "Acklam"
+              sumOfPayOffs     = getResultFn numOfSims 
+                                             (rngChooser userRng) 
+                                             (normalChooser userNorm) $ userData
               averagePayOff    = sumOfPayOffs / fromIntegral numOfSims
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData)
           putStrLn "Result:"

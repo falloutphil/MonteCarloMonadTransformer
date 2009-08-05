@@ -254,6 +254,14 @@ newtype Lookback = Lookback (Double,Double)
 data ContractType = ContractTypeEuropean European |
                     ContractTypeLookback Lookback
 
+
+contractChooser :: String -> Double -> ContractType
+contractChooser contractStr initialValue 
+   | contractStr == "European" = ContractTypeEuropean (European initialValue)
+   | contractStr == "Lookback" = ContractTypeLookback (Lookback (0,initialValue))
+   | otherwise                 = ContractTypeEuropean (European initialValue)
+
+ 
 class McClass a where
   nextTimeStep :: NormalClass b => RngClass c =>
                   MonteCarloUserData -> StateT a (StateT b (State c)) ()
@@ -295,16 +303,6 @@ instance McClass Lookback where
                                                               return ( () , newState )
    toValue (Lookback (max,_)) = max
 
-mc :: NormalClass a => RngClass b => 
-     (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
-mc evolver = StateT $ \s -> do norm <- nextNormal 
-                               return ((), evolver s norm)
-                               
--- Need a typeclass for these! **********************************
-mcPd :: NormalClass a => RngClass b => 
-       (Double->Double->Double->(Double,Double)) -> StateT (Double,Double) (StateT a (State b)) ()
-mcPd evolver = StateT $ \(currentV,maxV) -> do norm <- nextNormal
-                                               return ((), evolver currentV norm maxV)
                                
 evolveClosedForm :: MonteCarloUserData -> (Double -> Double -> Double)
 --evolveClosedForm userData currentValue normal
@@ -326,7 +324,6 @@ evolveStandard userData currentValue normal =
        drift      = (interestRate userData) * delta_t
       in currentValue * ( 1 + drift + stochastic)
       
---  Must also handle the extra parameter here currentMaxValue ************************
 evolveLookback :: MonteCarloUserData -> (Double -> Double -> Double -> (Double,Double))
 evolveLookback userData currentValue normal currentMaxValue =
    let newValue = evolveStandard userData currentValue normal
@@ -363,9 +360,15 @@ simResult numOfSims runTotal initRng initNorm initMc userData
 -- Yuk, the last bit of boilerplate!
 -- Returns a function takes the user data 
 -- and produces a result.
-getResultFn :: Int -> RngType -> NormalType -> ( MonteCarloUserData -> Double )
-getResultFn numOfSims rng (NormalTypeBoxMuller bm) = (getRngFn numOfSims rng) bm  (European 50)
-getResultFn numOfSims rng (NormalTypeAcklam ack)   = (getRngFn numOfSims rng) ack (European 50)
+getResultFn :: Int -> RngType -> NormalType -> ContractType -> ( MonteCarloUserData -> Double )
+getResultFn numOfSims rng norm (ContractTypeEuropean euro)  = getNormalAndRngFn numOfSims rng norm $ euro
+getResultFn numOfSims rng norm (ContractTypeLookback lb)    = getNormalAndRngFn numOfSims rng norm $ lb
+
+
+getNormalAndRngFn :: McClass a =>
+                     Int -> RngType -> NormalType -> ( a -> MonteCarloUserData -> Double)
+getNormalAndRngFn numOfSims rng (NormalTypeBoxMuller bm) = getRngFn numOfSims rng $ bm  
+getNormalAndRngFn numOfSims rng (NormalTypeAcklam ack)   = getRngFn numOfSims rng $ ack 
 
 -- Separating the decision across two functionals
 -- reduces the amount of boilerplate.
@@ -421,6 +424,7 @@ main = do {-putStrLn "Random Number Generator?"
               numOfSims = 5000
               userRng = "Halton"
               userNorm = "Box Muller"
+              userContract = "European"
               normalType = normalChooser userNorm
               -- Yuk, for QRNG we need to know our dimensionality
               -- before we start to simulate.
@@ -479,7 +483,8 @@ main = do {-putStrLn "Random Number Generator?"
                       in if even ts' then ts' else ts' + 1
               
               rngType          = rngChooser userRng ts
-              sumOfPayOffs     = getResultFn numOfSims rngType normalType $ userData
+              contractType     = contractChooser userContract (underlying userData)
+              sumOfPayOffs     = getResultFn numOfSims rngType normalType contractType $ userData
               averagePayOff    = sumOfPayOffs / fromIntegral numOfSims
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData * expiry userData)
           putStrLn "Result:"

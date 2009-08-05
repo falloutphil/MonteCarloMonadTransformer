@@ -291,15 +291,17 @@ payOff strike stock putcall =
 
 
 instance McClass European where
-   nextTimeStep userData = StateT $ \(European s) -> do norm <- nextNormal
-                                                        let !newState = European $ evolveStandard userData s norm
-                                                        return ( (), newState )
+   nextTimeStep userData = 
+      StateT $ \(European s) -> do norm <- nextNormal
+                                   let !newState = European $ evolveClosedForm userData s norm
+                                   return ( (), newState )
    toValue (European value) = value
 
 instance McClass Lookback where
-   nextTimeStep userData = StateT $ \(Lookback (max,s)) -> do norm <- nextNormal
-                                                              let !newState = Lookback $ evolveLookback userData s norm max
-                                                              return ( () , newState )
+   nextTimeStep userData = 
+      StateT $ \(Lookback (max,s)) -> do norm <- nextNormal
+                                         let !newState = Lookback $ evolveLookback userData s norm max
+                                         return ( () , newState )
    toValue (Lookback (max,_)) = max
 
                                
@@ -359,15 +361,21 @@ simResult numOfSims runTotal initRng initNorm initMc userData
 -- Yuk, the last bit of boilerplate!
 -- Returns a function takes the user data 
 -- and produces a result.
-getResultFn :: Int -> RngType -> NormalType -> ContractType -> ( MonteCarloUserData -> Double )
-getResultFn numOfSims rng norm (ContractTypeEuropean euro)  = getNormalAndRngFn numOfSims rng norm $ euro
-getResultFn numOfSims rng norm (ContractTypeLookback lb)    = getNormalAndRngFn numOfSims rng norm $ lb
+getResultFn :: Int -> RngType -> NormalType -> ContractType 
+               -> ( MonteCarloUserData -> Double )
+getResultFn numOfSims rng norm (ContractTypeEuropean euro)  = 
+   getNormalAndRngFn numOfSims rng norm $ euro
+getResultFn numOfSims rng norm (ContractTypeLookback lb)    = 
+  getNormalAndRngFn numOfSims rng norm $ lb
 
 
 getNormalAndRngFn :: McClass a =>
-                     Int -> RngType -> NormalType -> ( a -> MonteCarloUserData -> Double)
-getNormalAndRngFn numOfSims rng (NormalTypeBoxMuller bm) = getRngFn numOfSims rng $ bm  
-getNormalAndRngFn numOfSims rng (NormalTypeAcklam ack)   = getRngFn numOfSims rng $ ack 
+                     Int -> RngType -> NormalType -> 
+                     ( a -> MonteCarloUserData -> Double)
+getNormalAndRngFn numOfSims rng (NormalTypeBoxMuller bm) = 
+   getRngFn numOfSims rng $ bm  
+getNormalAndRngFn numOfSims rng (NormalTypeAcklam ack)   = 
+   getRngFn numOfSims rng $ ack 
 
 -- Separating the decision across two functionals
 -- reduces the amount of boilerplate.

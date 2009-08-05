@@ -58,7 +58,9 @@ primes = sieve [2..]
 newtype Halton = Halton [Double]
   deriving(Show)
 
-haltonInit :: Int -> Int -> Halton
+-- Wrapped in RngType so 'Halton' state
+-- can be thread through the getResultFn
+haltonInit :: Int -> Int -> RngType
 haltonInit initialState totalDims = 
    -- Infinite list of primes cycled according
    -- to our dimensionality is zipped with
@@ -72,7 +74,7 @@ haltonInit initialState totalDims =
    -- somewhat obfuscated :-)
    let primeList  = cycle $ take totalDims primes
        simNumList = [ tsSeeds | seeds <- [initialState..], tsSeeds <- replicate totalDims seeds ]
-      in Halton [ reflect (sim,1,0) prime | (sim,prime) <- zip simNumList primeList ]
+      in RngTypeHalton $ Halton [ reflect (sim,1,0) prime | (sim,prime) <- zip simNumList primeList ]
 
 -- The complex function above makes this a doddle.
 -- Note we NEVER force evaluation of the infinite list!
@@ -104,10 +106,10 @@ ranq1Increment =  ( `ranq1XorShift` (-4) ) .
 ranq1XorShift :: Word64 -> Int -> Word64
 ranq1XorShift v = (xor v) . (shift v)
  
-ranq1Init :: Word64 -> Ranq1
-ranq1Init = Ranq1 . convertToWord64 . 
-                    ranq1Increment  . 
-                    ( xor 4101842887655102017 ) 
+ranq1Init :: Word64 -> RngType
+ranq1Init = RngTypeRanq1 . Ranq1 . convertToWord64 . 
+                                   ranq1Increment    . 
+                                   ( xor 4101842887655102017 ) 
 
 
 -- Reversing isn't ideal - but it is better than appending to the end each time.
@@ -132,8 +134,8 @@ instance RngClass Ranq1 where
 -- so that they can be passed around under a single
 -- guise.  We use 'data', because 'newtype' must
 -- have exactly one constructor.
-data RngType = StateHalton Halton | 
-               StateRanq1  Ranq1
+data RngType = RngTypeHalton Halton | 
+               RngTypeRanq1  Ranq1
 
 -- Create a StateType containing the underlying
 -- inital state of our RNG depedning on user input.
@@ -142,9 +144,9 @@ data RngType = StateHalton Halton |
 rngChooser :: String -> Int -> RngType
 rngChooser rngStr totalTsDimensions
    -- Discard first 20 Haltons
-   | rngStr == "Halton" = StateHalton (haltonInit 20 totalTsDimensions)
-   | rngStr == "Ranq1"  = StateRanq1  (ranq1Init 1)
-   | otherwise          = StateHalton (haltonInit 20 totalTsDimensions)
+   | rngStr == "Halton" = haltonInit 20 totalTsDimensions
+   | rngStr == "Ranq1"  = ranq1Init 1
+   | otherwise          = haltonInit 20 totalTsDimensions
 
 
 
@@ -161,11 +163,6 @@ data NormalType = StateBoxMuller BoxMuller |
 
 class NormalClass a where
   nextNormal :: RngClass b => StateT a (State b) Double
-  normalDims :: a -> Int
-
--- Used to initalise RNG
-boxMullerDims = 2
-acklamDims = 1
 
 -- Box Muller
 
@@ -179,12 +176,12 @@ boxMuller rn1 rn2 = (normal1,normal2)
  
 instance NormalClass BoxMuller where
    nextNormal = 
-      StateT $ \(BoxMuller s) ->  case s of
-                                     Just d  -> return (d,BoxMuller Nothing)
-	                             Nothing -> do rn1:rn2:rns <- rngStateFn boxMullerDims
-	                                           let (norm1,norm2) = boxMuller rn1 rn2
-   				                   return (norm1,BoxMuller (Just norm2))
-   normalDims _ = 2
+      StateT $ \(BoxMuller s) -> case s of
+                                    Just d  -> return (d,BoxMuller Nothing)
+	                            Nothing -> do rn1:rn2:rns <- rngStateFn 2
+	                                          let (norm1,norm2) = boxMuller rn1 rn2
+   				                  return (norm1,BoxMuller (Just norm2))
+
 
 -- Peter Acklam's method
 
@@ -232,9 +229,9 @@ invnorm p
 -- a stateless state monad transformer!
 -- Compiler should (hopefully) recognise this!
 instance NormalClass Acklam where
-   nextNormal = StateT $ \_ -> do rn:rns <- rngStateFn acklamDims
+   nextNormal = StateT $ \_ -> do rn:rns <- rngStateFn 1
                                   return ( invnorm rn, Acklam () )
-   normalDims _ = 1
+ 
    
 
 normalChooser :: String -> NormalType
@@ -266,17 +263,22 @@ putCallMult Call = 1
 putCallMult Put  = -1
 
 payOff :: Double -> Double -> PutCall -> Double
-payOff strike stock putcall | profit > 0 = profit
-                            | otherwise = 0
-  where
-    profit = (putCallMult putcall)*(stock - strike)
+payOff strike stock putcall =
+   max 0 $ (putCallMult putcall)*(stock - strike) 
+
+
 
 mc :: NormalClass a => RngClass b => 
      (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
 mc evolver = StateT $ \s -> do norm <- nextNormal 
                                return ((), evolver s norm)
-
-
+                               
+-- Need a typeclass for these! **********************************
+mcPd :: NormalClass a => RngClass b => 
+       (Double->Double->Double->(Double,Double)) -> StateT (Double,Double) (StateT a (State b)) ()
+mcPd evolver = StateT $ \(currentV,maxV) -> do norm <- nextNormal
+                                               return ((), evolver currentV norm maxV)
+                               
 evolveClosedForm :: MonteCarloUserData -> (Double -> Double -> Double)
 --evolveClosedForm userData currentValue normal
 --   | trace ( "   currentValue " ++ show currentValue ++ " normal " ++ show normal ) False=undefined 
@@ -296,6 +298,13 @@ evolveStandard userData currentValue normal =
        stochastic = vol * normal * sqrt delta_t
        drift      = (interestRate userData) * delta_t
       in currentValue * ( 1 + drift + stochastic)
+      
+--  Must also handle the extra parameter here currentMaxValue ************************
+evolveLookback :: MonteCarloUserData -> (Double -> Double -> Double -> (Double,Double))
+evolveLookback userData currentValue normal currentMaxValue =
+   let newValue = evolveStandard userData currentValue normal
+      in (  max newValue currentMaxValue, newValue )
+
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
@@ -342,8 +351,8 @@ getResultFn numOfSims rng (StateAcklam ack)   = getRngFn numOfSims rng $ ack
 -- in one function we would have a case for each NormalType.
 getRngFn :: NormalClass a => Show a =>
             Int -> RngType -> ( a -> MonteCarloUserData -> Double)
-getRngFn numOfSims (StateHalton halton) = simResult numOfSims 0 halton 
-getRngFn numOfSims (StateRanq1  ranq1)  = simResult numOfSims 0 ranq1  
+getRngFn numOfSims (RngTypeHalton halton) = simResult numOfSims 0 halton 
+getRngFn numOfSims (RngTypeRanq1  ranq1)  = simResult numOfSims 0 ranq1  
 
 
 main :: IO()

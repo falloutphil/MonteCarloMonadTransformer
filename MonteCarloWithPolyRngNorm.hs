@@ -268,15 +268,14 @@ class McClass a where
   toValue :: a -> Double
 
 
+-- Holds only constant data
 data MonteCarloUserData = MonteCarloUserData 
    { strike       :: Double,
-     underlying   :: Double,
      putCall      :: PutCall,
      volatility   :: Double,
      expiry       :: Double,
      interestRate :: Double,
-     timeSteps    :: Int,
-     evolveFn     :: MonteCarloUserData -> (Double -> Double -> Double) }
+     timeSteps    :: Int  }
 
 data PutCall = Put | Call
                deriving (Read)
@@ -413,18 +412,17 @@ main = do {-putStrLn "Random Number Generator?"
                                               iterations   = read(userIterations) }   -}    
 
           -- BS = 5.191
-          let userData = MonteCarloUserData { strike       = 52, --100, 
-                                              underlying   = 50, --100, 
+          let userData = MonteCarloUserData { strike       = 100, --52, --100, 
                                               putCall      = Call,
-                                              volatility   = 0.4, --0.2,  
-                                              expiry       = 5/12, --1, 
-                                              interestRate = 0.1, --0.05,
-                                              timeSteps    = 10,
-                                              evolveFn     = evolveStandard }                      
-              numOfSims = 5000
-              userRng = "Halton"
-              userNorm = "Box Muller"
-              userContract = "European"
+                                              volatility   = 0.2, --0.4, --0.2,  
+                                              expiry       = 1, --5/12, --1, 
+                                              interestRate = 0.05, --0.1, --0.05,
+                                              timeSteps    = 100 }                      
+              numOfSims = 10000
+              userRng = "Ranq1"
+              userNorm = "Acklam"
+              userContract = "Lookback"
+              underLying = 100
               normalType = normalChooser userNorm
               -- Yuk, for QRNG we need to know our dimensionality
               -- before we start to simulate.
@@ -483,7 +481,7 @@ main = do {-putStrLn "Random Number Generator?"
                       in if even ts' then ts' else ts' + 1
               
               rngType          = rngChooser userRng ts
-              contractType     = contractChooser userContract (underlying userData)
+              contractType     = contractChooser userContract underLying
               sumOfPayOffs     = getResultFn numOfSims rngType normalType contractType $ userData
               averagePayOff    = sumOfPayOffs / fromIntegral numOfSims
               discountedPayOff = averagePayOff * exp (-1 * interestRate userData * expiry userData)

@@ -158,8 +158,8 @@ newtype BoxMuller = BoxMuller (Maybe Double)
 newtype Acklam    = Acklam ()
    deriving (Show)
 
-data NormalType = StateBoxMuller BoxMuller |
-                  StateAcklam    Acklam
+data NormalType = NormalTypeBoxMuller BoxMuller |
+                  NormalTypeAcklam    Acklam
 
 class NormalClass a where
   nextNormal :: RngClass b => StateT a (State b) Double
@@ -236,13 +236,27 @@ instance NormalClass Acklam where
 
 normalChooser :: String -> NormalType
 normalChooser normStr 
-   | normStr == "Box Muller" = StateBoxMuller (BoxMuller Nothing)
-   | normStr == "Acklam"     = StateAcklam (Acklam () )
-   | otherwise               = StateBoxMuller (BoxMuller Nothing)
+   | normStr == "Box Muller" = NormalTypeBoxMuller (BoxMuller Nothing)
+   | normStr == "Acklam"     = NormalTypeAcklam    (Acklam ())
+   | otherwise               = NormalTypeBoxMuller (BoxMuller Nothing)
 
 
 
 -- Monte Carlo
+
+
+newtype European = European Double
+   deriving (Show)
+
+newtype Lookback = Lookback (Double,Double)
+   deriving (Show)
+
+data ContractType = ContractTypeEuropean European |
+                    ContractTypeLookBack Lookback
+
+class McClass a where
+  nextTimeStep :: NormalClass b => RngClass c =>
+                  MonteCarloUserData -> StateT a (StateT b (State c)) ()
 
 
 data MonteCarloUserData = MonteCarloUserData 
@@ -267,6 +281,12 @@ payOff strike stock putcall =
    max 0 $ (putCallMult putcall)*(stock - strike) 
 
 
+instance McClass European where
+   nextTimeStep userData = StateT $ \(European s) -> do norm <- nextNormal
+                                                        return ( (), European $ evolveStandard userData s norm )
+instance McClass Lookback where
+   nextTimeStep userData = StateT $ \(Lookback (max,s)) -> do norm <- nextNormal
+                                                              return ( (), Lookback $ evolveLookback userData s norm max )
 
 mc :: NormalClass a => RngClass b => 
      (Double->Double->Double) -> StateT Double (StateT a (State b)) ()
@@ -308,16 +328,15 @@ evolveLookback userData currentValue normal currentMaxValue =
 
 -- Here's the polymorphism!  Evaluate a monad stack
 -- where the inner monad is of RngClass and outer is of NormalClass
-singleResult :: RngClass a => NormalClass b => -- Show a =>
-                a -> b -> MonteCarloUserData -> ( Double, (a,b) )
+singleResult :: RngClass a => NormalClass b => McClass c => -- Show a =>
+                a -> b -> c -> MonteCarloUserData -> ( c, (a,b) )
 --singleResult initRngState initNormState userData 
 --   | trace ( "   initRngState " ++ show initRngState ) False=undefined 
-singleResult initRngState initNormState userData = 
+singleResult initRngState initNormState initMcState userData = 
    let (((mc_a,mc_s), norm_s), rng_s) = runState rngMonad initRngState
          where rngMonad     = runStateT normMonadT initNormState
-               evolve       = evolveFn userData $ userData
-               mcCombinator = do replicateM_ (timeSteps userData) (mc evolve)
-               normMonadT   = runStateT mcCombinator (underlying userData)
+               mcCombinator = do replicateM_ (timeSteps userData) (nextTimeStep userData)
+               normMonadT   = runStateT mcCombinator initMcState
       in (mc_s, (rng_s,norm_s))
                                                      
 
@@ -327,7 +346,7 @@ simResult :: RngClass a => NormalClass b => Show a => Show b =>
 --   | trace ( "numOfSims " ++ show numOfSims ++ "   initRng " ++ show initRng ) False=undefined 
 simResult numOfSims runTotal initRng initNorm userData 
    | numOfSims <= 1 = runTotal
-   | otherwise = let (!value,(!rngS,!normS)) = singleResult initRng initNorm userData
+   | otherwise = let (!European value,(!rngS,!normS)) = singleResult initRng initNorm (European 50) userData
                      !newNumOfSims           = numOfSims - 1
                      profit                  = tracePassThrough (payOff (strike userData) value (putCall userData)) "Pay off"
                      !newRunTotal            = runTotal + profit
@@ -338,8 +357,8 @@ simResult numOfSims runTotal initRng initNorm userData
 -- Returns a function takes the user data 
 -- and produces a result.
 getResultFn :: Int -> RngType -> NormalType -> ( MonteCarloUserData -> Double )
-getResultFn numOfSims rng (StateBoxMuller bm) = getRngFn numOfSims rng $ bm
-getResultFn numOfSims rng (StateAcklam ack)   = getRngFn numOfSims rng $ ack
+getResultFn numOfSims rng (NormalTypeBoxMuller bm) = getRngFn numOfSims rng $ bm
+getResultFn numOfSims rng (NormalTypeAcklam ack)   = getRngFn numOfSims rng $ ack
 
 -- Separating the decision across two functionals
 -- reduces the amount of boilerplate.
